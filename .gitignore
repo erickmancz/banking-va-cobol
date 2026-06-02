@@ -1,0 +1,7 @@
+bin/
+SAIDA
+LOGFILE
+mock-generated.inc
+*.so
+*.dylib
+.DS_Store

@@ -41,19 +41,29 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Instalar GnuCOBOL
-        run: sudo apt-get update && sudo apt-get install -y gnucobol
-      - name: Comparar cenário mock COBOL com golden
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - uses: mamba-org/setup-micromamba@add3a49764cedee8ee24e82dfde87f5bc2914462 # v2
+        with:
+          environment-name: extrato-cobol
+          micromamba-version: '2.10.0-0'
+          create-args: >-
+            -c conda-forge
+            gnucobol=3.2=h6df41c7_2
+      - name: Identificar compilador
+        shell: micromamba-shell {0}
+        run: |
+          cobc -V
+          gcc --version
+          micromamba list -n extrato-cobol
+      - name: Empacotar Java
+        working-directory: extrato-java
+        run: mvn -B -ntp -DskipTests package
+      - name: Comparar COBOL real, JAR e golden
+        shell: micromamba-shell {0}
         env:
           LC_ALL: C
-        run: |
-          workdir="$(mktemp -d)"
-          trap 'rm -rf "$workdir"' EXIT
-          cp PGMEXTRT.cbl PGMFMTEXT.cbl PGMGRVEXT.cbl PGMLECRD_mock.cbl "$workdir/"
-          awk -f scripts/gen-mock-from-dat.awk extrato-java/src/test/resources/mock-operacoes.dat > "$workdir/mock-generated.inc"
-          golden="$GITHUB_WORKSPACE/extrato-java/src/test/resources/SAIDA.golden"
-          cd "$workdir"
-          cobc -std=mvs -x -o extrato PGMEXTRT.cbl PGMFMTEXT.cbl PGMGRVEXT.cbl PGMLECRD_mock.cbl
-          ./extrato
-          cmp "$golden" SAIDA
-          # Apenas SAIDA de um mock local; não valida LOGFILE, DB2 ou z/OS.
+        run: python3 scripts/test-diferencial.py

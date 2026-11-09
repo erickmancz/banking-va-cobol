@@ -38,9 +38,33 @@ Usa driver IBM incluído via extensão Quarkus JDBC DB2 e SQL parametrizado sobr
 
 `src/test/resources/SAIDA.golden` é a SAIDA de GnuCOBOL 3.2 (`-std=mvs`, GCC 12, locale POSIX), compilada isoladamente a partir dos fontes e do `mock-operacoes.dat` original gerado pelo awk, com PARM local padrão. O arquivo contém seis registros de 132 bytes, sem delimitadores; SHA-256 `58e51edc3af67a259159c866e4e024f34059eb8137720918d95ee617920e15a7`. Todos os bytes são ASCII, compatíveis com ISO-8859-1 e UTF-8 nesse cenário. O mock copiado tem SHA-256 `23d2a60670105154e06177ae8363e5a843f38fd645f7a264ff644df366326f80`. `RegressaoTest.goldenCobolMockOriginal` compara todos os bytes; isto não valida outros dados, LOGFILE dinâmico, DB2 ou z/OS. O COBOL local emitiu aviso de fechamento implícito de `ARQ-SAIDA-GRV`.
 
-Os testes Java de limites e overflow não são comparação COBOL: a comparação de overflow da entrega anterior não foi versionada como fixture reproduzível. Não há golden COBOL de overflow neste repositório; para repetir esse cenário é preciso gerar entradas controladas, recompilar o mock COBOL e comparar com Java. Não inferir cobertura geral de paridade.
+### Suíte diferencial local
 
-O workflow `.github/workflows/extrato-java.yml` executa `mvn -B -ntp verify` em Java 21 e exige evidência Surefire da execução do teste golden. Em job separado instala GnuCOBOL no runner Ubuntu, compila o mock versionado em diretório temporário e compara sua SAIDA com o mesmo golden. Os jobs dependem dos repositórios públicos Ubuntu, Maven e GitHub; uma falha de instalação ou execução falha o CI, não representa paridade aprovada. Nenhum job acessa DB2 ou z/OS.
+Requer Python 3, Java 21, Maven, awk, compilador C e GnuCOBOL **3.2** com dialeto `-std=mvs`. A partir da raiz, com essas ferramentas no PATH:
+
+```sh
+(cd extrato-java && mvn -B -ntp -DskipTests package)
+python3 scripts/test-diferencial.py
+```
+
+O script cria diretórios isolados em `/tmp`, gera o include com o awk original, compila cópias dos quatro fontes COBOL sem alterá-los e executa o binário e o **JAR empacotado** como processos separados com os mesmos dados sintéticos ASCII. Falha se faltarem compilador ou JAR; não usa Java para produzir esperado. Compara RC, todos os bytes de SAIDA e número de registros FB 132; no cenário original compara ambos ao golden versionado. Em sucesso compara LOGFILE completo exceto bytes 0–5 (`HHMMSS`), validando que são dígitos; os bytes 6–131 permanecem estritos. Não compara stdout/stderr: COBOL pode emitir aviso de fechamento implícito sem equivalente Java. Em erro de abertura de SAIDA, compara apenas RC 12 e preservação do diretório, pois logs e mensagens de sistema não têm contrato comum.
+
+Casos: golden, arquivo vazio (tabela padrão de três, **não** zero operações reais), uma operação (primeira consumida, zero detalhes), três, 50, extremos de campos numéricos e overflow de total no campo de rodapé; status A/I/Q/R/X, descrições de modalidades e datas sintéticas inclusive `2026-06-`; CRLF, comentários, aspas e truncamento de campos. Essas descrições são passadas pelo mock, não testam mapeamento DB2. Argumento de data inválido existe apenas no CLI Java. Número inválido falha na compilação COBOL e em runtime Java; 51 operações são testadas só no Java, pois excedem `OCCURS 50` e executar o COBOL seria acesso fora da tabela. Com LOGFILE sendo diretório, ambos retornam 12, mas COBOL local deixa SAIDA de 528 bytes com detalhe duplicado e Java, vazia; o teste registra essa **divergência**, não paridade. Erros verificam RC, presença de mensagem e arquivos parciais onde aplicável, sem afirmar equivalência dos pontos de falha. Não se exercita zero operações de uma fonte real, acentos/CCSID, erros de DB2, falhas de fetch ou z/OS.
+
+O workflow `.github/workflows/extrato-java.yml` mantém dois jobs independentes: `java` executa `mvn -B -ntp verify` e confere Surefire; `cobol-mock` fixa pacote conda-forge `gnucobol=3.2=h6df41c7_2`, registra `cobc -V`, GCC e pacotes resolvidos, empacota o JAR e roda a suíte. Versão micromamba e revisão da action são fixadas; dependências transitivas Conda não são lockadas e podem variar. O pacote Linux x86-64 tem SHA-256 `d7304a0f830066eb430559bec9e38d8a7f0286169a7376fbeb67aaa10d55c253`; receita declara fonte GNU 3.2 SHA-256 `3bb48af46ced4779facf41fdc2ee60e4ccb86eaa99d010b36685315df39c2ee2`. Isso fixa o compilador, não a imagem inteira. Os jobs dependem de Conda, Maven e GitHub; falha de instalação ou execução falha o CI. Nenhum job acessa DB2 ou z/OS.
+
+### Diagnóstico 3.1.2 versus 3.2
+
+No commit base, o job remoto instalou o pacote Ubuntu, mas falhou na etapa composta de compilação/execução/comparação. Os logs detalhados não estavam acessíveis (HTTP 403), logo **não se sabe qual comando falhou nem a versão efetivamente instalada**. Não atribuir causalidade ao compilador sem esses logs.
+
+Para reproduzir o diagnóstico com cada compilador já instalado e isolado no PATH, da raiz:
+
+```sh
+LC_ALL=C cobc -V
+LC_ALL=C cobc -std=mvs -fsyntax-only PGMEXTRT.cbl
+```
+
+Observado localmente: GnuCOBOL 3.1.2.0 construído da tag `gnucobol-3.1.2`, commit `5ab722e656a25dc95ab99705ee1063562f2e5be5`, GCC 12.2, retorna 1 com erros nos parágrafos das linhas 210 e 233 (falta de ponto antes deles); GnuCOBOL 3.2.0 conda acima aceita o original e a suíte passa. A troca para 3.2 evita essa incompatibilidade demonstrada sem alterar COBOL, mas não prova a causa do CI anterior nem comportamento IBM. Consulte os logs autorizados do run `42697886628` para concluir a investigação. O golden foi originalmente gerado com 3.2 e GCC 12; a reprodução local desta suíte utilizou pacote Conda e GCC 16.2, não o binário do runner original.
 
 ## Integração opt-in com DB2 de homologação
 

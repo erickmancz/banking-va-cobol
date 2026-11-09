@@ -1,0 +1,59 @@
+name: Extrato Java
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  java:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Build e testes
+        working-directory: extrato-java
+        run: mvn -B -ntp verify
+      - name: Confirmar execução do golden versionado
+        working-directory: extrato-java
+        run: |
+          python3 -c '
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          report = Path("target/surefire-reports/TEST-br.com.air.extrato.RegressaoTest.xml")
+          root = ET.parse(report).getroot()
+          tests = [case for case in root.findall("testcase")
+                   if case.get("classname") == "br.com.air.extrato.RegressaoTest"
+                   and case.get("name") == "goldenCobolMockOriginal"]
+          if len(tests) != 1 or any(tests[0].find(tag) is not None for tag in ("skipped", "failure", "error")):
+              raise SystemExit("O teste golden deve executar exatamente uma vez e passar")
+          print("Golden versionado executado e aprovado")
+          '
+
+  cobol-mock:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar GnuCOBOL
+        run: sudo apt-get update && sudo apt-get install -y gnucobol
+      - name: Comparar cenário mock COBOL com golden
+        env:
+          LC_ALL: C
+        run: |
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "$workdir"' EXIT
+          cp PGMEXTRT.cbl PGMFMTEXT.cbl PGMGRVEXT.cbl PGMLECRD_mock.cbl "$workdir/"
+          awk -f scripts/gen-mock-from-dat.awk extrato-java/src/test/resources/mock-operacoes.dat > "$workdir/mock-generated.inc"
+          golden="$GITHUB_WORKSPACE/extrato-java/src/test/resources/SAIDA.golden"
+          cd "$workdir"
+          cobc -std=mvs -x -o extrato PGMEXTRT.cbl PGMFMTEXT.cbl PGMGRVEXT.cbl PGMLECRD_mock.cbl
+          ./extrato
+          cmp "$golden" SAIDA
+          # Apenas SAIDA de um mock local; não valida LOGFILE, DB2 ou z/OS.

@@ -38,6 +38,35 @@ Usa driver IBM incluído via extensão Quarkus JDBC DB2 e SQL parametrizado sobr
 
 `src/test/resources/SAIDA.golden` é a SAIDA de GnuCOBOL 3.2 (`-std=mvs`, GCC 12, locale POSIX), compilada isoladamente a partir dos fontes e do `mock-operacoes.dat` original gerado pelo awk, com PARM local padrão. O arquivo contém seis registros de 132 bytes, sem delimitadores; SHA-256 `58e51edc3af67a259159c866e4e024f34059eb8137720918d95ee617920e15a7`. Todos os bytes são ASCII, compatíveis com ISO-8859-1 e UTF-8 nesse cenário. O mock copiado tem SHA-256 `23d2a60670105154e06177ae8363e5a843f38fd645f7a264ff644df366326f80`. `RegressaoTest.goldenCobolMockOriginal` compara todos os bytes; isto não valida outros dados, LOGFILE dinâmico, DB2 ou z/OS. O COBOL local emitiu aviso de fechamento implícito de `ARQ-SAIDA-GRV`.
 
+### Fluxo opt-in local de homologação mock sintética
+
+`homologacao_mock.py` é independente da CLI existente e **não publica nem distribui**. Executa somente `--fonte mock`; não conecta DB2. Destina-se exclusivamente a fixtures e resultados sintéticos sem dados pessoais ou segredos. O operador deve confirmar a origem sintética, a independência do golden e a confiança no JAR, JVM, dependências e PATH; não é possível comprová-las pelo conteúdo ou hash. Golden deve ser gerado por referência independente antes da execução, jamais pela execução Java sob teste. Guarde autoria, versão, origem e aprovação do golden fora deste fluxo; igualdade não constitui aceite de negócio nem prova de paridade geral.
+
+Pré-condições: Python 3 stdlib em Linux, `waitid`/`WNOWAIT`, `/proc` confiável e com visibilidade completa da sessão de processos, Java 21 e JAR Quarkus **já empacotado** com toda a árvore `target/quarkus-app` intacta. Insumos são arquivos existentes, regulares e distintos, no máximo 8 MiB, sem symlinks em qualquer componente; fixture precisa conter linha que o mock aceite (evita fallback), golden não vazio e múltiplo de 132 bytes. Uma raiz existente deve pertencer ao UID efetivo, ter modo exato 0700, ACL efetivamente privada e armazenamento adequado. Os caminhos devem ser absolutos, sem `.` ou `..`; não use a raiz ou os insumos de produção. Não modifique JAR, dependências, diretórios ou insumos durante a execução.
+
+Exemplo local, partindo de `extrato-java`, depois de conferir as pré-condições de ACL e confiança em `/tmp`; o diretório criado para demonstração deve permanecer disponível para inspeção:
+
+```sh
+mvn -B -ntp -DskipTests package
+umask 077
+raiz=$(mktemp -d /tmp/extrato-homologacao.XXXXXXXX)
+chmod 700 "$raiz"
+chmod g-s "$raiz"
+python3 homologacao_mock.py --somente-sinteticos --raiz "$raiz" \
+  --fixture "$PWD/src/test/resources/mock-operacoes.dat" \
+  --golden "$PWD/src/test/resources/SAIDA.golden" \
+  --jar "$PWD/target/quarkus-app/quarkus-run.jar" --timeout 60
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_homologacao_mock
+```
+
+O comando imprime o caminho de uma execução nova aleatória 0700; não escolhe nomes de saída arbitrários. Essa pasta contém cópias da fixture/golden, `SAIDA`, `LOGFILE`, `stdout`, `stderr` e `resultado.json` quando disponíveis. O JSON registra RC Java, timeout, presença de membros ativos no grupo, resultado e hashes SHA-256/tamanhos dos arquivos lidos; o hash do JAR cobre **somente** `quarkus-run.jar`, não a árvore de dependências, JVM ou classe efetivamente carregada. A comparação de SAIDA é exata por bytes, não compara o log ao golden; o log de sucesso é validado como um único registro 132 com hora e mensagem inicial. Ambiente do processo contém apenas HOME/TMPDIR privados, locale C e TZ UTC; timeout padrão 60 s (1–600), limite de 8 MiB por arquivo. Captura stdout ou stderr no limite é inconclusiva mesmo que tenha exatamente 8 MiB, pois pode ter sido truncada. Falha na criação do manifesto, interrupção abrupta ou ausência de evidências é sempre inconclusiva; preserve o diretório mesmo sem JSON.
+
+RC do wrapper 0 significa Java RC 0, saída/log/capturas válidos e SAIDA idêntica ao golden. RC não zero inclui `DIFERENTE` ou `INCONCLUSIVO`, timeout, RC Java diferente de zero, erro de arquivo, falha na preparação e argumentos inválidos; `rc_java` nulo significa que não foi observado. RC 4/12 do Java não aprova parciais. Não interprete manifesto isoladamente se houve interrupção ou modificação posterior. Para rollback, não há deploy ou troca de artefatos: interrompa a execução, não use os arquivos, preserve-os para análise e volte ao fluxo anterior; exclusão manual somente após decisão de retenção autorizada. Nenhum arquivo anterior é alvo de limpeza automática.
+
+O processo é iniciado em nova sessão e grupo; `waitid(WNOWAIT)` mantém o líder terminado sem reap para reservar seu PID/PGID até inspecionar `/proc/*/stat`. Membros não zumbis remanescentes no grupo provocam SIGKILL nesse grupo e resultado INCONCLUSIVO, inclusive quando o líder retorna RC 0; o script aguarda até dois segundos para verificar a cessação. Zumbis não executam e não impedem o resultado, mas seu reap pertence ao sistema. Timeout também mata o grupo; falha de inspeção fecha a execução. A visibilidade completa de `/proc` é pré-condição externa: verificar o próprio processo e o líder não detecta `hidepid`, namespace parcial ou omissões silenciosas.
+
+**Modelo de confiança:** isolamento operacional, não quarentena de segurança, sandbox ou contenção de JVM/JAR malicioso. Exige FS POSIX local com permissões, abertura exclusiva e identidades de inode confiáveis, ancestrais estáveis e ACLs efetivamente privadas verificadas pelo operador; modo 0700 sozinho não certifica ACL, mounts, backups, root ou acesso administrativo. Não protege contra processos concorrentes do mesmo UID, troca de caminhos/JAR/dependências após verificação, execução maliciosa, filhos que escapem do grupo de processo, alterações de FS ou falha elétrica; timeout e limite de arquivo não são limites de CPU/memória. A inspeção pontual do grupo não prova ausência de processos em outros grupos nem elimina TOCTOU; ao abortar ou interromper o próprio wrapper não há garantia de finalizar os filhos. Bloqueie concorrência não confiável por controles externos. O script rejeita links e aliases observados, mas não oferece proteção atômica universal contra TOCTOU. Falha de gravação pode impedir salvar manifesto. Insumos, stdout/stderr e log podem ser preservados em disco: nunca forneça segredos ou dados reais. Política de retenção/descarte, critérios de aceite, aprovações, operação em DB2/z/OS e uso operacional permanecem decisões separadas.
+
 ### Suíte diferencial local
 
 Requer Python 3, Java 21, Maven, awk, compilador C e GnuCOBOL **3.2** com dialeto `-std=mvs`. A partir da raiz, com essas ferramentas no PATH:

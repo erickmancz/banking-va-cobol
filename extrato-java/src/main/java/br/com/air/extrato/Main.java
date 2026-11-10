@@ -14,6 +14,8 @@ public class Main implements QuarkusApplication {
     public static void main(String... args) { Quarkus.run(Main.class, args); }
 
     @Override public int run(String... args) {
+        if (args.length > 0 && args[0].equals("--demo-corrigido"))
+            return DemoCorrigido.executar(args);
         try {
             Map<String, String> opts = argumentos(args);
             if (opts.containsKey("help")) {

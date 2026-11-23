@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Historical only: invokes the old CLI and expects the legacy report/log contract.
+# Do not use this wrapper to accept the corrected Java batch without redesign.
 """Execução opt-in de homologação local exclusivamente com dados sintéticos."""
 import argparse
 import hashlib

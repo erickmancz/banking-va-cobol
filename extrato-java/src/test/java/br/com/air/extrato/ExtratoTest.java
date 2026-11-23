@@ -3,103 +3,132 @@ package br.com.air.extrato;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.math.BigDecimal;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.List;
-import java.util.Locale;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class ExtratoTest {
     @TempDir Path dir;
-
-    private Operacao op(String id, String status, String data, String valor) {
-        return new Operacao("0001", id, "CPE", "DESCRICAO", new BigDecimal("12.34"), 12, 3,
-                new BigDecimal(valor), data, status);
+    private Operacao op(String id, String status, String amount) {
+        return new Operacao("0042123456", id, "CPE", "Credit", new BigDecimal("12.34"), 12, 3,
+                new BigDecimal(amount), "20261231", status);
     }
-
-    @Test void registrosFixosPrimeiroDescartadoERodape() throws Exception {
-        Path saida = dir.resolve("saida"), log = dir.resolve("log");
-        Extrato.executar(List.of(op("PRIMEIRO", "A", "20260601", "9"),
-                op("SEGUNDO", "I", "20261231", "100.50")), saida, log, LocalTime.NOON);
-        String s = Files.readString(saida, StandardCharsets.ISO_8859_1);
-        assertEquals(396, s.length());
-        assertTrue(s.substring(0, 132).startsWith(" BANCO AIR S.A."));
-        assertTrue(s.substring(132, 264).startsWith("SEGUNDO"));
-        assertTrue(s.substring(132, 264).contains("31/12/2026  INADIMPLENT"));
-        assertTrue(s.substring(264).contains("1,00"));
-        assertEquals(132, Files.size(log));
+    private int run(List<Operacao> operations, Charset charset) throws Exception {
+        return Extrato.executar(() -> Fontes.lista(operations), dir.resolve("output"), dir.resolve("log"),
+                LocalTime.NOON, charset, Formato::detalhe);
     }
-    @Test void vazioEUmRegistroNaoGeramDetalhes() throws Exception {
-        for (var ops : List.of(List.<Operacao>of(), List.of(op("X", "A", "20260601", "1")))) {
-            Path saida = dir.resolve("s"), log = dir.resolve("l");
-            Extrato.executar(ops, saida, log, LocalTime.MIDNIGHT);
-            assertEquals(264, Files.size(saida));
+    @Test void allRowsAndExactCentsAppearInFixedRecords() throws Exception {
+        assertEquals(0, run(List.of(op("FIRST", "A", "9.01"), op("SECOND", "I", "100.50")), StandardCharsets.ISO_8859_1));
+        String output = Files.readString(dir.resolve("output"), StandardCharsets.ISO_8859_1);
+        assertEquals(4 * 132, output.length());
+        assertTrue(output.substring(132, 264).startsWith("FIRST"));
+        assertEquals("FIRST         " + "  " + "Credit              " + "  " + "          12.34" + "  "
+                + "    12" + "  " + "     3" + "  " + "           9.01" + "  "
+                + "31/12/2026" + "  " + "ACTIVE     " + " ".repeat(21), output.substring(132, 264));
+        assertTrue(output.substring(264, 396).contains("31/12/2026  DELINQUENT"));
+        assertTrue(output.substring(396).contains("109.51"));
+        assertEquals(264, Files.size(dir.resolve("log")));
+    }
+    @Test void emptyAndSingleRowProduceExpectedCounts() throws Exception {
+        assertEquals(0, run(List.of(), StandardCharsets.ISO_8859_1));
+        assertEquals(264, Files.size(dir.resolve("output")));
+        assertEquals(0, run(List.of(op("ONLY", "A", "0")), StandardCharsets.ISO_8859_1));
+        assertEquals(396, Files.size(dir.resolve("output")));
+    }
+    @Test void selectionAndOrderingIncludeAllFilters() throws Exception {
+        Path input = dir.resolve("mock");
+        Files.writeString(input, String.join("\n", List.of(
+                "0042123456|Z|CSG|customer text|12.34|12|3|9.01|20261231|A|0042|20260508",
+                "0042123456|B|CPE|x|1|2|1|1|20260201|I|0042|20260501",
+                "0042123456|A|CPE|x|1|2|1|1|20260201|A|0042|20260501",
+                "0042123456|FUTURE|CPE|x|1|2|1|1|20260201|A|0042|20260509",
+                "0042123456|STATUS|CPE|x|1|2|1|1|20260201|Q|0042|20260501",
+                "0042123456|BRANCH|CPE|x|1|2|1|1|20260201|A|0043|20260501",
+                "0042123457|ACCOUNT|CPE|x|1|2|1|1|20260201|A|0042|20260501")));
+        try (var source = Fontes.abrirMock(input, "0042123456", "0042", LocalDate.of(2026, 5, 8))) {
+            assertEquals("A", source.proxima().contrato());
+            assertEquals("B", source.proxima().contrato());
+            assertEquals("Z", source.proxima().contrato());
+            assertNull(source.proxima());
         }
     }
-    @Test void mockPreservaOrdemEIgnoraFiltros() throws Exception {
+    @Test void legacyTenFieldsDeriveBranchAndUseCutoff() throws Exception {
         Path input = dir.resolve("mock");
-        Files.writeString(input, "# comentário\nlinha ruim\n1|A|CPE|x|1|1|0|1|20260101|Q\n2|B|CPE|y|2|2|1|2|20260202|R\n");
-        var ops = Fontes.mock(input);
-        assertEquals(List.of("A", "B"), ops.stream().map(Operacao::contrato).toList());
-        assertEquals("R", ops.get(1).status());
-        assertTrue(Formato.detalhe(ops.get(1)).contains("DESCONHECID"));
-        assertTrue(Formato.detalhe(ops.get(0)).contains("QUITADO"));
+        Files.writeString(input, "0042123456|A|CPE|raw description|1|1|0|1|20260201|A\n");
+        try (var source = Fontes.abrirMock(input, "0042123456", "0042", LocalDate.of(2026, 5, 8))) {
+            assertEquals("raw description", source.proxima().descricao());
+            assertNull(source.proxima());
+        }
     }
-    @Test void mockVazioUsaTabelaPadrao() throws Exception {
-        Path input = dir.resolve("empty"); Files.writeString(input, "# comentario\n");
-        assertEquals(3, Fontes.mock(input).size());
-        assertEquals(3, Fontes.mock(dir.resolve("ausente")).size());
+    @Test void shortPaddedAndAlphanumericBranchesAreSelected() throws Exception {
+        Path input = dir.resolve("mock"), output = dir.resolve("output"), log = dir.resolve("log");
+        for (String branch : List.of("AB", "AB12")) {
+            Files.writeString(input, "0042123456|A|CPE|x|1|1|0|1|20260101|A|" + branch + " ".repeat(4 - branch.length()) + "|20260508\n");
+            assertEquals(0, new Main().run("--mock", input.toString(), "--branch", branch, "--output", output.toString(), "--log", log.toString()));
+            assertEquals(396, Files.size(output));
+        }
     }
-    @Test void dataIsoTruncadaSemCorrigir() {
-        assertTrue(Formato.detalhe(op("X", "A", "2026-06-", "0")).contains("6-/-0/2026"));
+    @Test void shortAccountWithoutExplicitBranchFailsBeforeSelection() throws Exception {
+        Path input = dir.resolve("mock"), output = dir.resolve("output"), log = dir.resolve("log");
+        Files.writeString(input, "ABC|A|CPE|x|1|1|0|1|20260101|A\n");
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                () -> Fontes.abrirMock(input, "OTHER", "AB", LocalDate.of(2026, 5, 8)));
+        assertEquals("Invalid mock unresolvable branch (account shorter than four characters) at line 1", failure.getMessage());
+        assertEquals(12, new Main().run("--mock", input.toString(), "--account", "ABC", "--branch", "AB", "--output", output.toString(), "--log", log.toString()));
+        assertTrue(Files.readString(log).contains("unresolvable branch (account shorter than four characters) at line 1"));
+        Files.writeString(input, "ABC|A|CPE|x|1|1|0|1|20260101|A|AB|20260508\n");
+        assertEquals(0, new Main().run("--mock", input.toString(), "--account", "ABC", "--branch", "AB", "--output", output.toString(), "--log", log.toString()));
+        assertEquals(396, Files.size(output));
     }
-    @Test void formatosNumericosEContagemLimitada() {
-        assertEquals("          0,00 ", Formato.editado(BigDecimal.ZERO));
-        assertEquals("        123,45 ", Formato.editado(new BigDecimal("12345.67")));
-        assertEquals(Formato.rodape(1, BigDecimal.TEN), Formato.rodape(1001, BigDecimal.TEN));
+    @Test void malformedMockAndMissingFileFailInsteadOfFallback() throws Exception {
+        Path input = dir.resolve("mock");
+        Files.writeString(input, "bad\n");
+        assertThrows(IllegalArgumentException.class, () -> Fontes.abrirMock(input, "a", "0001", LocalDate.now()));
+        assertThrows(java.io.IOException.class, () -> Fontes.abrirMock(dir.resolve("missing"), "a", "0001", LocalDate.now()));
+        Files.writeString(input, "# empty\n");
+        try (var source = Fontes.abrirMock(input, "a", "0001", LocalDate.now())) { assertNull(source.proxima()); }
     }
-    @Test void validacoesDeCliEArquivos() {
-        assertThrows(IllegalArgumentException.class, () -> Main.argumentos(new String[]{"--fonte"}));
-        assertThrows(IllegalArgumentException.class, () -> Main.argumentos(new String[]{"--foo", "bar"}));
-        assertThrows(IllegalArgumentException.class, () -> Main.argumentos(new String[]{"--data", "1", "--data", "2"}));
-        assertThrows(IllegalArgumentException.class, () -> Extrato.executar(List.of(), dir.resolve("x"), dir.resolve("x"), LocalTime.NOON));
+    @Test void invalidSelectionKeysAndSelectedPaidCountAreRejected() throws Exception {
+        Path input = dir.resolve("mock");
+        for (String row : List.of(
+                "0042123456X|A|CPE|x|1|1|0|1|20260101|A|0042|20260508",
+                "0042123456|A|CPE|x|1|1|0|1|20260101|A|0042X|20260508",
+                "0042123456|A|CPE|x|1|1|0|1|20260101|AA|0042|20260508",
+                "0042123456|A|CPE|x|1|1|2|1|20260101|A|0042|20260508",
+                "0042123456|A|CPE|x|1|1|0|1|00000101|A|0042|20260508")) {
+            Files.writeString(input, row);
+            assertThrows(IllegalArgumentException.class, () -> Fontes.abrirMock(input, "0042123456", "0042", LocalDate.of(2026, 5, 8)));
+        }
+        assertThrows(IllegalArgumentException.class, () -> Formato.date("00000101"));
     }
-    @Test void queryDocumentaFiltrosEOrdemDb2() {
-        assertTrue(Fontes.SQL.contains("OC.CD_STATUS IN ('A', 'I')"));
+    @Test void monetaryAndCountOverflowFailWithoutTruncation() {
+        assertTrue(Formato.rodape(1001, new BigDecimal("12345.67")).contains("1001"));
+        assertTrue(Formato.rodape(1001, new BigDecimal("12345.67")).contains("12345.67"));
+        assertThrows(IllegalArgumentException.class, () -> Formato.rodape(10_000_000, BigDecimal.ZERO));
+        assertThrows(IllegalArgumentException.class, () -> Formato.rodape(1, new BigDecimal("1000000000000.00")));
+        String boundary = Formato.detalhe(new Operacao("a", "id", "CPE", "x", new BigDecimal("-99999999999.99"), -32768, 32767, new BigDecimal("99999999999.99"), "20260101", "A"));
+        assertTrue(boundary.contains("-99999999999.99"));
+        assertTrue(boundary.contains("-32768"));
+        assertTrue(boundary.contains("32767"));
+        assertThrows(ArithmeticException.class, () -> Formato.rodape(1, new BigDecimal("1.001")));
+    }
+    @Test void encodingRejectsUnmappableAndMultibyteData() throws Exception {
+        var item = new Operacao("a", "é", "CPE", "x", BigDecimal.ONE, 1, 0, BigDecimal.ONE, "20260101", "A");
+        assertEquals(12, run(List.of(item), StandardCharsets.UTF_8));
+        assertEquals(12, run(List.of(item), StandardCharsets.US_ASCII));
+        assertEquals(0, run(List.of(item), Charset.forName("IBM037")));
+        assertEquals(396, Files.size(dir.resolve("output")));
+    }
+    @Test void queryUsesExplicitSelectionParameters() {
+        assertTrue(Fontes.SQL.contains("OC.NR_CONTA = ? AND OC.CD_AGENCIA = ?"));
         assertTrue(Fontes.SQL.contains("OC.DT_REFERENCIA <= ?"));
         assertTrue(Fontes.SQL.contains("ORDER BY OC.CD_MODALIDADE, OC.NR_CONTRATO WITH UR"));
-    }
-    @Test void mockNumerosTruncadosComoPic() throws Exception {
-        Path input = dir.resolve("m"); Files.writeString(input, "1|A|CPE|x|1.239|2500|1|2.555|20260101|A\n");
-        var op = Fontes.mock(input).getFirst();
-        assertEquals(500, op.parcelas());
-        assertEquals(new BigDecimal("1.23"), op.original());
-        assertEquals(new BigDecimal("2.55"), op.saldo());
-    }
-    @Test void totalPassaPeloCampoDeOnzeDigitosAntesDaEdicao() throws Exception {
-        Path saida = dir.resolve("saida"), log = dir.resolve("log");
-        Extrato.executar(List.of(op("descartado", "A", "20260601", "0"),
-                op("primeiro", "A", "20260601", "60000000000.00"),
-                op("segundo", "A", "20260601", "60000000000.00")), saida, log, LocalTime.NOON);
-        String rodape = Files.readString(saida, StandardCharsets.ISO_8859_1).substring(396);
-        assertEquals(Formato.rodape(2, new BigDecimal("20000000000.00")), rodape);
-        assertEquals("  200000000,00", rodape.substring(73, 87));
-    }
-    @Test void quantidadesUsamAlgarismosAsciiEmLocaleArabe() throws Exception {
-        Locale anterior = Locale.getDefault();
-        try {
-            Locale.setDefault(Locale.forLanguageTag("ar-EG"));
-            Path saida = dir.resolve("saida"), log = dir.resolve("log");
-            Extrato.executar(List.of(op("descartado", "A", "20260601", "0"),
-                    op("detalhe", "A", "20260601", "1")), saida, log, LocalTime.NOON);
-            String detalhe = Files.readString(saida, StandardCharsets.ISO_8859_1).substring(132, 264);
-            assertEquals("  12", detalhe.substring(54, 58));
-            assertEquals("    3", detalhe.substring(60, 65));
-        } finally {
-            Locale.setDefault(anterior);
-        }
+        assertEquals("REAL ESTATE FINANCE", Fontes.descricao("RF "));
     }
 }

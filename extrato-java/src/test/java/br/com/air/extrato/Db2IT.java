@@ -7,7 +7,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
-import java.sql.Date;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
@@ -25,74 +24,73 @@ class Db2IT {
         String url = obrigatoria("EXTRATO_DB2_URL");
         String usuario = obrigatoria("EXTRATO_DB2_USER");
         String senha = obrigatoria("EXTRATO_DB2_PASSWORD");
-        String data = obrigatoria("EXTRATO_DB2_IT_DATA");
-        String alternativa = obrigatoria("EXTRATO_DB2_IT_DATA_ALTERNATIVA");
+        String data = obrigatoria("EXTRATO_DB2_IT_ACCOUNT");
+        String alternativa = obrigatoria("EXTRATO_DB2_IT_OTHER_ACCOUNT");
+        String agencia = obrigatoria("EXTRATO_DB2_IT_BRANCH");
         String corteTexto = obrigatoria("EXTRATO_DB2_IT_CORTE");
         Path operacoes = Path.of(obrigatoria("EXTRATO_DB2_IT_OPERACOES"));
         Path golden = Path.of(obrigatoria("EXTRATO_DB2_IT_SAIDA"));
-        assertTrue(data.matches("[0-9]{8}") && alternativa.matches("[0-9]{8}") && !data.equals(alternativa),
-                "Datas de parâmetro devem ter 8 dígitos e ser distintas");
+        assertTrue(!data.equals(alternativa) && !agencia.isBlank() && agencia.length() <= 4 && agencia.equals(agencia.strip()), "Distinct accounts and a 1-4 character branch are required");
         LocalDate corte = LocalDate.parse(corteTexto);
-        assertTrue(Files.isRegularFile(operacoes) && Files.isReadable(operacoes), "Fixture de operações deve ser arquivo legível");
-        assertTrue(Files.isRegularFile(golden) && Files.isReadable(golden), "Golden de SAIDA deve ser arquivo legível");
+        assertTrue(Files.isRegularFile(operacoes) && Files.isReadable(operacoes), "Operations fixture must be readable");
+        assertTrue(Files.isRegularFile(golden) && Files.isReadable(golden), "Expected output must be readable");
         List<Operacao> esperado = lerEsperado(operacoes);
-        assertTrue(esperado.size() >= 3, "Fixture deve conter pelo menos 3 operações aceitas");
+        assertTrue(esperado.size() >= 3, "Fixture must contain at least three selected operations");
         assertTrue(esperado.stream().allMatch(o -> o.conta().equals(data) && List.of("A", "I").contains(o.status())),
-                "Fixture deve conter apenas conta e status aceitos");
+                "Fixture must contain only the selected account and statuses");
         assertTrue(esperado.stream().map(Operacao::modalidade).distinct().count() >= 2,
-                "Fixture deve conter modalidades distintas");
+                "Fixture must contain distinct modalities");
         assertTrue(esperado.stream().anyMatch(a -> esperado.stream().anyMatch(b -> a != b
                 && a.modalidade().equals(b.modalidade()) && !a.contrato().equals(b.contrato()))),
-                "Fixture deve conter dois contratos distintos na mesma modalidade");
+                "Fixture must contain distinct contracts within one modality");
 
-        // Cada testemunha satisfaz os outros filtros, isolando a condição que deve excluí-la.
+        // Each witness satisfies the other filters, isolating its exclusion condition.
         try (Connection c = DriverManager.getConnection(url, usuario, senha)) {
-            String agencia = data.substring(0, 4);
-            testemunha(c, data, agencia, corte, "OC.CD_AGENCIA <> ? AND OC.CD_STATUS IN ('A','I') AND OC.DT_REFERENCIA <= ?", "agência diferente");
-            testemunha(c, data, agencia, corte, "OC.CD_AGENCIA = ? AND OC.CD_STATUS NOT IN ('A','I') AND OC.DT_REFERENCIA <= ?", "status excluído");
-            testemunha(c, data, agencia, corte, "OC.CD_AGENCIA = ? AND OC.CD_STATUS IN ('A','I') AND OC.DT_REFERENCIA > ?", "referência posterior");
-            testemunha(c, alternativa, agencia, corte, "OC.CD_AGENCIA = ? AND OC.CD_STATUS IN ('A','I') AND OC.DT_REFERENCIA <= ?", "conta diferente");
+            testemunha(c, data, agencia, corte, "OC.CD_AGENCIA <> ? AND OC.CD_STATUS IN ('A','I') AND OC.DT_REFERENCIA <= ?", "different branch");
+            testemunha(c, data, agencia, corte, "OC.CD_AGENCIA = ? AND OC.CD_STATUS NOT IN ('A','I') AND OC.DT_REFERENCIA <= ?", "excluded status");
+            testemunha(c, data, agencia, corte, "OC.CD_AGENCIA = ? AND OC.CD_STATUS IN ('A','I') AND OC.DT_REFERENCIA > ?", "later reference date");
+            testemunha(c, alternativa, agencia, corte, "OC.CD_AGENCIA = ? AND OC.CD_STATUS IN ('A','I') AND OC.DT_REFERENCIA <= ?", "different account");
         } catch (java.sql.SQLException e) {
-            fail("Falha ao consultar testemunhas DB2; verifique conexão, privilégios e schema (detalhes omitidos)");
+            fail("DB2 witness query failed; check connectivity, privileges and schema (details omitted)");
         }
 
         List<Operacao> obtido = new ArrayList<>();
-        try (Fontes.Leitura leitura = Fontes.db2(url, usuario, senha, data, corte)) {
+        try (Fontes.Leitura leitura = Fontes.db2(url, usuario, senha, data, agencia, corte)) {
             Operacao op;
             while ((op = leitura.proxima()) != null) obtido.add(normalizar(op));
         } catch (Exception e) {
-            fail("Falha na leitura DB2; verifique conexão, privilégios, schema e dados (detalhes omitidos)");
+            fail("DB2 read failed; check connectivity, privileges, schema and data (details omitted)");
         }
-        assertEquals(esperado, obtido, "Operações, filtros, conversões e ordem devem corresponder à fixture independente");
+        assertEquals(esperado, obtido, "Operations, filters, conversions and ordering must match the independent fixture");
 
         Path saida = dir.resolve("SAIDA"), log = dir.resolve("LOGFILE");
-        int rc = Extrato.executar(() -> abrirSemDetalhes(url, usuario, senha, data, corte), saida, log,
-                LocalTime.NOON, Formato::detalhe);
-        assertEquals(0, rc, "Processamento DB2 falhou");
-        assertArrayEquals(Files.readAllBytes(golden), Files.readAllBytes(saida), "SAIDA diverge do golden externo");
+        int rc = Extrato.executar(() -> abrirSemDetalhes(url, usuario, senha, data, agencia, corte), saida, log,
+                LocalTime.NOON, StandardCharsets.ISO_8859_1, Formato::detalhe);
+        assertEquals(0, rc, "DB2 processing failed");
+        assertArrayEquals(Files.readAllBytes(golden), Files.readAllBytes(saida), "Output differs from independent expected bytes");
     }
 
     private static String obrigatoria(String nome) {
         String valor = System.getenv(nome);
-        assertTrue(valor != null && !valor.isBlank(), "Configure a variável de ambiente " + nome + " para o perfil db2-it");
+        assertTrue(valor != null && !valor.isBlank(), "Configure environment variable " + nome + " for db2-it");
         return valor;
     }
 
-    private static Fontes.Leitura abrirSemDetalhes(String url, String usuario, String senha, String data, LocalDate corte) throws SQLException {
+    private static Fontes.Leitura abrirSemDetalhes(String url, String usuario, String senha, String data, String agencia, LocalDate corte) throws SQLException {
         try {
-            Fontes.Leitura leitura = Fontes.db2(url, usuario, senha, data, corte);
+            Fontes.Leitura leitura = Fontes.db2(url, usuario, senha, data, agencia, corte);
             return new Fontes.Leitura() {
                 public Operacao proxima() throws SQLException {
                     try { return leitura.proxima(); }
-                    catch (Exception e) { throw new SQLException("Falha na leitura DB2"); }
+                    catch (Exception e) { throw new SQLException("DB2 read failed"); }
                 }
                 public void close() throws SQLException {
                     try { leitura.close(); }
-                    catch (Exception e) { throw new SQLException("Falha ao fechar leitura DB2"); }
+                    catch (Exception e) { throw new SQLException("DB2 close failed"); }
                 }
             };
         } catch (Exception e) {
-            throw new SQLException("Falha ao abrir leitura DB2");
+            throw new SQLException("DB2 open failed");
         }
     }
 
@@ -100,11 +98,11 @@ class Db2IT {
         String sql = "SELECT COUNT(*) FROM DB2PROD.TB_OPERACAO_CREDITO OC INNER JOIN DB2PROD.TB_CLIENTE CLI "
                 + "ON CLI.NR_CONTA = OC.NR_CONTA WHERE OC.NR_CONTA = ? AND " + filtro + " WITH UR";
         try (PreparedStatement p = c.prepareStatement(sql)) {
-            p.setString(1, Formato.fixo(data, 10));
+            p.setString(1, data);
             p.setString(2, agencia);
-            p.setDate(3, Date.valueOf(corte));
+            p.setObject(3, corte);
             try (var r = p.executeQuery()) {
-                assertTrue(r.next() && r.getLong(1) > 0, "Dados externos devem incluir testemunha: " + descricao);
+                assertTrue(r.next() && r.getLong(1) > 0, "External data must include witness: " + descricao);
             }
         }
     }
@@ -114,7 +112,7 @@ class Db2IT {
         for (String linha : Files.readAllLines(arquivo, StandardCharsets.UTF_8)) {
             if (linha.isBlank() || linha.startsWith("#")) continue;
             String[] f = linha.split("\t", -1);
-            assertEquals(10, f.length, "Fixture deve ter 10 campos TSV por linha");
+            assertEquals(10, f.length, "Fixture must have 10 TSV fields per row");
             ops.add(normalizar(new Operacao(f[0], f[1], f[2], f[3], new BigDecimal(f[4]),
                     Integer.parseInt(f[5]), Integer.parseInt(f[6]), new BigDecimal(f[7]), f[8], f[9])));
         }

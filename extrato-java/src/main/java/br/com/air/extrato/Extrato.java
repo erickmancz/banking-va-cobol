@@ -18,6 +18,7 @@ import java.util.function.Function;
 final class Extrato {
     private Extrato() {}
     @FunctionalInterface interface Abrir { Fontes.Leitura abrir() throws Exception; }
+    @FunctionalInterface interface AbrirSaida { OutputStream abrir(Path path) throws IOException; }
 
     static void validarCaminhos(Path output, Path log, Path input) throws IOException {
         verificarLinks(output);
@@ -49,23 +50,44 @@ final class Extrato {
     }
     static int executar(Abrir open, Path output, Path log, LocalTime time, Charset charset,
                         Function<Operacao, String> formatter) throws IOException {
+        return executar(open, output, log, time, charset, formatter, Files::newOutputStream);
+    }
+    static int executar(Abrir open, Path output, Path log, LocalTime time, Charset charset,
+                        Function<Operacao, String> formatter, AbrirSaida openOutput) throws IOException {
         validarCaminhos(output, log, null);
-        try (OutputStream out = Files.newOutputStream(output); OutputStream logOut = Files.newOutputStream(log)) {
-            String prefix = time.format(DateTimeFormatter.ofPattern("HHmmss")) + "  PGMEXTRT ";
-            log(logOut, charset, prefix, "INFO", "CREDIT STATEMENT STARTED");
-            try (Fontes.Leitura source = open.abrir()) {
-                gravar(out, Formato.cabecalho(), charset);
-                BigDecimal total = BigDecimal.ZERO;
-                long count = 0;
-                Operacao op;
-                while ((op = source.proxima()) != null) {
-                    String line = formatter.apply(op);
-                    gravar(out, line, charset);
-                    total = total.add(op.saldo());
-                    count = Math.addExact(count, 1);
+        OutputStream out = openOutput.abrir(output);
+        OutputStream logStream;
+        try {
+            logStream = openOutput.abrir(log);
+        } catch (IOException | RuntimeException | Error e) {
+            try { out.close(); } catch (Throwable closeFailure) { e.addSuppressed(closeFailure); }
+            throw e;
+        }
+        try (OutputStream logOut = logStream) {
+            String prefix = null;
+            boolean started = false;
+            try (out) {
+                prefix = time.format(DateTimeFormatter.ofPattern("HHmmss")) + "  PGMEXTRT ";
+                log(logOut, charset, prefix, "INFO", "CREDIT STATEMENT STARTED");
+                started = true;
+                try (Fontes.Leitura source = open.abrir()) {
+                    gravar(out, Formato.cabecalho(), charset);
+                    BigDecimal total = BigDecimal.ZERO;
+                    long count = 0;
+                    Operacao op;
+                    while ((op = source.proxima()) != null) {
+                        String line = formatter.apply(op);
+                        gravar(out, line, charset);
+                        total = total.add(op.saldo());
+                        count = Math.addExact(count, 1);
+                    }
+                    gravar(out, Formato.rodape(count, total), charset);
                 }
-                gravar(out, Formato.rodape(count, total), charset);
             } catch (Exception e) {
+                if (!started) {
+                    if (e instanceof IOException io) throw io;
+                    throw (RuntimeException) e;
+                }
                 try { log(logOut, charset, prefix, "ERROR", "BATCH PROCESSING FAILED: " + safeMessage(e)); }
                 catch (IOException | RuntimeException ignored) { }
                 System.err.println("Batch processing failed: " + safeMessage(e));

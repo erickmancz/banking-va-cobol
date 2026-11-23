@@ -59,6 +59,8 @@ Detail fields use these one-based inclusive positions: contract 1–14, descript
 
 A successful run returns 0 and writes start and completion log records. Fatal input, read, format or write errors return 12; processing failures attempt an error log record and print a sanitized message to stderr. The output and log files are replaced, and an error can leave them empty or partial: preserve them for diagnosis and do not distribute them. Input, output and log must be distinct paths, including existing aliases; this check is not an atomic defense against concurrent path changes. Inspect records locally, for example, with `fold -b -w132 SAIDA`.
 
+Completion is written only after the report closes successfully; a report-close failure attempts a sanitized error record. Logging and close failures may still leave partial or missing log records, and a completion record can remain if the log close subsequently fails. Closing files does not guarantee durable storage or atomic publication.
+
 Report and log labels are English; input data and identifiers are not translated. In particular, Portuguese legacy report labels and the English labels are incompatible even when the business data match. Do not claim byte parity with the legacy golden.
 
 Detail amounts are right-aligned and use a decimal point in Java; the legacy formatter trims and left-aligns the amount and uses a comma editing mask. These changes affect fixed-position consumers independently of the language change and require downstream adaptation.

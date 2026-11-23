@@ -4,15 +4,25 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.time.format.ResolverStyle;
 
 final class Formato {
     private Formato() {}
     static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("uuuuMMdd").withResolverStyle(ResolverStyle.STRICT);
     static LocalDate date(String value) {
-        LocalDate date = LocalDate.parse(value, DATE);
+        if (value == null || !value.matches("[0-9]{8}"))
+            throw new DateTimeParseException("Date must be a valid YYYYMMDD date", "", 0);
+        LocalDate date;
+        try { date = LocalDate.parse(value, DATE); }
+        catch (DateTimeParseException e) { throw new DateTimeParseException("Date must be a valid YYYYMMDD date", "", 0); }
         if (date.getYear() < 1) throw new IllegalArgumentException("Date year must be at least 0001");
         return date;
+    }
+    static String compactDate(LocalDate date) {
+        if (date == null || date.getYear() < 1 || date.getYear() > 9999)
+            throw new IllegalArgumentException("Date year must be between 0001 and 9999");
+        return date.format(DATE);
     }
     static String fixo(String value, int width) {
         if (value == null || value.length() > width || value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0)

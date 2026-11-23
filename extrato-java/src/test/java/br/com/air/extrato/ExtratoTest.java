@@ -2,6 +2,8 @@ package br.com.air.extrato;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
 import java.math.BigDecimal;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
@@ -106,6 +108,56 @@ class ExtratoTest {
             assertThrows(IllegalArgumentException.class, () -> Fontes.abrirMock(input, "0042123456", "0042", LocalDate.of(2026, 5, 8)));
         }
         assertThrows(IllegalArgumentException.class, () -> Formato.date("00000101"));
+    }
+    @Test void datesRequireEightAsciiDigitsAndValidCalendarYears() {
+        for (String input : List.of("+100000101", "00000101", "20230229", "19000229", "20261301",
+                "２０２６０１０１", " 20260101", "20260101 ", "2026010X")) {
+            RuntimeException failure = assertThrows(RuntimeException.class, () -> Formato.date(input));
+            assertFalse(failure.getMessage().contains(input));
+        }
+        for (String input : List.of("00010101", "99991231", "20000229", "20240229", "15821010"))
+            assertEquals(input, Formato.compactDate(Formato.date(input)));
+        for (LocalDate input : List.of(LocalDate.of(0, 1, 1), LocalDate.of(10000, 1, 1), LocalDate.of(-1, 1, 1)))
+            assertThrows(IllegalArgumentException.class, () -> Formato.compactDate(input));
+    }
+    @Test void invalidCutoffAndMockDatesFailWithoutExposingValues() throws Exception {
+        Path input = dir.resolve("mock"), output = dir.resolve("output"), log = dir.resolve("log");
+        Files.writeString(input, "0042123456|A|CPE|x|1|1|0|1|20260101|A|0042|20260508\n");
+        PrintStream original = System.err;
+        var errors = new ByteArrayOutputStream();
+        try (var captured = new PrintStream(errors, true, StandardCharsets.UTF_8)) {
+            System.setErr(captured);
+            for (String invalid : List.of("+100000101", "00000101", "20230229", "２０２６０１０１")) {
+                assertEquals(12, new Main().run("--date", invalid, "--mock", input.toString(), "--output", output.toString(), "--log", log.toString()));
+                assertFalse(errors.toString(StandardCharsets.UTF_8).contains(invalid));
+            }
+            for (String field : List.of("reference date", "due date")) {
+                for (String invalid : List.of("+100000101", " +100000101 ", "00000101", "20230229")) {
+                    String due = field.equals("due date") ? invalid : "20260101";
+                    String reference = field.equals("reference date") ? invalid : "20260508";
+                    Files.writeString(input, "0042123456|A|CPE|x|1|1|0|1|" + due + "|A|0042|" + reference + "\n");
+                    assertEquals(12, new Main().run("--mock", input.toString(), "--output", output.toString(), "--log", log.toString()));
+                    String logText = Files.readString(log);
+                    assertTrue(logText.contains("Invalid mock " + field + " at line 1"));
+                    assertFalse(logText.contains(invalid));
+                    assertFalse(errors.toString(StandardCharsets.UTF_8).contains(invalid));
+                }
+            }
+        } finally { System.setErr(original); }
+    }
+    @Test void boundaryDatesKeepDetailOffsets() throws Exception {
+        Path input = dir.resolve("mock"), output = dir.resolve("output"), log = dir.resolve("log");
+        for (String[] dates : List.of(new String[]{"00010101", "01/01/0001"}, new String[]{"99991231", "31/12/9999"},
+                new String[]{"20000229", "29/02/2000"}, new String[]{"20240229", "29/02/2024"})) {
+            Files.writeString(input, "0042123456|A|CPE|x|1|1|0|1| " + dates[0] + " |A|0042| " + dates[0] + " \n");
+            assertEquals(0, new Main().run("--date", dates[0], "--mock", input.toString(), "--output", output.toString(), "--log", log.toString()));
+            String report = Files.readString(output);
+            assertEquals(396, report.length());
+            String detail = report.substring(132, 264);
+            assertEquals(dates[1], detail.substring(88, 98));
+            assertEquals("  ", detail.substring(98, 100));
+            assertEquals("ACTIVE     ", detail.substring(100, 111));
+        }
     }
     @Test void monetaryAndCountOverflowFailWithoutTruncation() {
         assertTrue(Formato.rodape(1001, new BigDecimal("12345.67")).contains("1001"));

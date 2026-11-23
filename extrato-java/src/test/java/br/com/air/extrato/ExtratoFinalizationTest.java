@@ -29,6 +29,7 @@ class ExtratoFinalizationTest {
     private boolean logCloseFailure;
     private boolean logOpenFailure;
     private boolean sourceCloseFailure;
+    private boolean fetchFailure;
     private int reportWrites;
     private int logWrites;
 
@@ -58,7 +59,7 @@ class ExtratoFinalizationTest {
                 12, 3, new BigDecimal("9.01"), "20261231", "A");
         return new Fontes.Leitura() {
             boolean read;
-            public Operacao proxima() { if (read) return null; read = true; return item; }
+            public Operacao proxima() throws IOException { if (fetchFailure && read) throw new IOException(SECRET); if (read) return null; read = true; return item; }
             public void close() throws IOException {
                 events.add("source-close");
                 if (sourceCloseFailure) throw new IOException(SECRET);
@@ -69,6 +70,10 @@ class ExtratoFinalizationTest {
     private int run() throws IOException {
         return Extrato.executar(this::source, output, log, LocalTime.NOON, StandardCharsets.ISO_8859_1,
                 Formato::detalhe, streams());
+    }
+    private int runSummary() throws IOException {
+        return Extrato.executar(this::source, output, log, LocalTime.NOON, StandardCharsets.ISO_8859_1,
+                Formato::detalhe, streams(), true);
     }
 
     private String logText() throws IOException { return Files.readString(dir.resolve(log), StandardCharsets.ISO_8859_1); }
@@ -161,5 +166,38 @@ class ExtratoFinalizationTest {
         assertThrows(IOException.class, this::run);
         assertEquals(start(), logText());
         assertEquals("log-close", events.getLast());
+    }
+
+    @Test void summaryFollowsSuccessfulReportCloseAndCompletion() throws Exception {
+        assertEquals(0, runSummary());
+        assertEquals(start() + completed() + record("120000  PGMEXTRT INFO OPERATIONS: 1 LINES: 3 ERRORS: 0"), logText());
+        assertTrue(events.indexOf("report-close") < events.indexOf("log-write-2"));
+        assertTrue(events.indexOf("log-write-2") < events.indexOf("log-write-3"));
+        assertEquals("log-close", events.getLast());
+    }
+
+    @Test void noSummaryOnReportWriteCloseOrFetchFailure() throws Exception {
+        for (int failure = 1; failure <= 5; failure++) {
+            events.clear(); reportWrites = 0; logWrites = 0;
+            reportWriteFailure = failure <= 3 ? failure : 0;
+            reportCloseFailure = failure == 4;
+            fetchFailure = failure == 5;
+            assertEquals(12, runSummary());
+            assertEquals(start() + error(), logText());
+            assertEquals(2, logWrites);
+        }
+    }
+
+    @Test void summaryWriteAndLogCloseFailuresPropagate() throws Exception {
+        logWriteFailure = 3;
+        assertThrows(IOException.class, this::runSummary);
+        assertEquals(start() + completed(), logText());
+        events.clear(); reportWrites = 0; logWrites = 0; logWriteFailure = 0; logCloseFailure = true;
+        assertThrows(IOException.class, this::runSummary);
+        assertEquals(start() + completed() + record("120000  PGMEXTRT INFO OPERATIONS: 1 LINES: 3 ERRORS: 0"), logText());
+    }
+
+    @Test void summaryDoesNotTruncateTheLargestSuccessfulFooterCount() {
+        assertEquals("OPERATIONS: 9999999 LINES: 10000001 ERRORS: 0", Extrato.summary(9999999));
     }
 }

@@ -50,10 +50,18 @@ final class Extrato {
     }
     static int executar(Abrir open, Path output, Path log, LocalTime time, Charset charset,
                         Function<Operacao, String> formatter) throws IOException {
-        return executar(open, output, log, time, charset, formatter, Files::newOutputStream);
+        return executar(open, output, log, time, charset, formatter, false);
+    }
+    static int executar(Abrir open, Path output, Path log, LocalTime time, Charset charset,
+                        Function<Operacao, String> formatter, boolean summaryLog) throws IOException {
+        return executar(open, output, log, time, charset, formatter, Files::newOutputStream, summaryLog);
     }
     static int executar(Abrir open, Path output, Path log, LocalTime time, Charset charset,
                         Function<Operacao, String> formatter, AbrirSaida openOutput) throws IOException {
+        return executar(open, output, log, time, charset, formatter, openOutput, false);
+    }
+    static int executar(Abrir open, Path output, Path log, LocalTime time, Charset charset,
+                        Function<Operacao, String> formatter, AbrirSaida openOutput, boolean summaryLog) throws IOException {
         validarCaminhos(output, log, null);
         OutputStream out = openOutput.abrir(output);
         OutputStream logStream;
@@ -66,6 +74,7 @@ final class Extrato {
         try (OutputStream logOut = logStream) {
             String prefix = null;
             boolean started = false;
+            long count = 0;
             try (out) {
                 prefix = time.format(DateTimeFormatter.ofPattern("HHmmss")) + "  PGMEXTRT ";
                 log(logOut, charset, prefix, "INFO", "CREDIT STATEMENT STARTED");
@@ -73,7 +82,6 @@ final class Extrato {
                 try (Fontes.Leitura source = open.abrir()) {
                     gravar(out, Formato.cabecalho(), charset);
                     BigDecimal total = BigDecimal.ZERO;
-                    long count = 0;
                     Operacao op;
                     while ((op = source.proxima()) != null) {
                         String line = formatter.apply(op);
@@ -94,8 +102,12 @@ final class Extrato {
                 return 12;
             }
             log(logOut, charset, prefix, "INFO", "CREDIT STATEMENT COMPLETED");
+            if (summaryLog) log(logOut, charset, prefix, "INFO", summary(count));
             return 0;
         }
+    }
+    static String summary(long count) {
+        return "OPERATIONS: " + count + " LINES: " + Math.addExact(count, 2) + " ERRORS: 0";
     }
     private static String safeMessage(Exception e) {
         if (e instanceof java.sql.SQLException) return "DB2 operation failed";

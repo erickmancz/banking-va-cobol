@@ -34,6 +34,8 @@ class BatchCliIT {
             + "TOTAL BALANCE:          " + "         110.50" + "                                            ";
     private static final String EMPTY_FOOTER = "TOTAL OPERATIONS:     " + "      0" + "                    "
             + "TOTAL BALANCE:          " + "           0.00" + "                                            ";
+    private static final String ONE_FOOTER = "TOTAL OPERATIONS:     " + "      1" + "                    "
+            + "TOTAL BALANCE:          " + "           0.99" + "                                            ";
     private static final String INPUT =
             "0042123456|0-INPUT-FIRST|CSG|PAYROLL LOAN|200.10|10|5|100.50|20280229|A|0042|20260508\n"
             + "0042123456|B-SECOND|CPE|PERSONAL LOAN|12.34|12|3|9.01|20261231|A|0042|20260507\n"
@@ -118,6 +120,44 @@ class BatchCliIT {
         assertEquals(0, run("--help"));
         assertTrue(Files.readString(dir.resolve("console")).contains(
                 "For db2, --account, --branch and --date are required explicitly; mock uses defaults when omitted."));
+        assertTrue(Files.readString(dir.resolve("console")).contains("--summary-log adds a separate success log record"));
+    }
+
+    @Test void summaryFlagHasNoValueAndCannotBeRepeated() throws Exception {
+        for (String[] args : List.of(new String[] {"--summary-log", "--summary-log"},
+                new String[] {"--summary-log", "true"}, new String[] {"--summary-log=true"})) {
+            assertEquals(12, run(args));
+            assertTrue(Files.readString(dir.resolve("console")).contains("Batch failed:"));
+        }
+    }
+
+    @Test void summaryAndDefaultBytesForZeroOneAndFilteredMultipleInBothEncodings() throws Exception {
+        Path input = dir.resolve("input"), output = dir.resolve("output"), log = dir.resolve("log");
+        for (String encoding : List.of("ISO-8859-1", "IBM037")) {
+            Charset charset = Charset.forName(encoding);
+            for (int count : List.of(0, 1, 3)) {
+                String data = count == 0 ? "" : count == 1 ? INPUT.lines().filter(s -> s.contains("A-FIRST")).findFirst().orElseThrow() + "\n" : INPUT;
+                Files.writeString(input, data, StandardCharsets.ISO_8859_1);
+                String[] expected = count == 0 ? new String[] {HEADER, EMPTY_FOOTER}
+                        : count == 1 ? new String[] {HEADER, FIRST, ONE_FOOTER}
+                        : new String[] {HEADER, FIRST, SECOND, THIRD, FOOTER};
+                String[] defaults = args(input, output, log, encoding);
+                assertEquals(0, run(defaults));
+                assertRecords(output, charset, expected);
+                assertLog(log, charset, "INFO CREDIT STATEMENT COMPLETED");
+                List<String> options = new ArrayList<>(List.of(defaults));
+                options.add("--summary-log");
+                assertEquals(0, run(options.toArray(String[]::new)));
+                assertRecords(output, charset, expected);
+                byte[] bytes = Files.readAllBytes(log);
+                assertEquals(396, bytes.length);
+                String records = new String(bytes, charset);
+                assertArrayEquals(bytes, records.getBytes(charset));
+                assertLogRecord(records.substring(0, 132), "INFO CREDIT STATEMENT STARTED");
+                assertLogRecord(records.substring(132, 264), "INFO CREDIT STATEMENT COMPLETED");
+                assertLogRecord(records.substring(264), "INFO OPERATIONS: " + count + " LINES: " + (count + 2) + " ERRORS: 0");
+            }
+        }
     }
 
     @Test void missingDb2SelectionsFailBeforeFilesOrConnection() throws Exception {

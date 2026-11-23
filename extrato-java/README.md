@@ -12,7 +12,7 @@ java -jar target/quarkus-app/quarkus-run.jar --source mock --mock ../mock-operac
   --account 0042123456 --branch 0042 --date 20260508 --output SAIDA --log LOGFILE
 ```
 
-Use `--help` for the CLI. All options take a value except `--help`; repeated value options or unknown options are errors. Paths are relative to the current working directory. Do not use production output paths during qualification.
+Use `--help` for the CLI. All options take a value except `--help` and `--summary-log`; repeated value options, repeated `--summary-log`, and unknown options are errors. Paths are relative to the current working directory. Do not use production output paths during qualification.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -24,6 +24,7 @@ Use `--help` for the CLI. All options take a value except `--help`; repeated val
 | `--output` | `SAIDA` | Statement path |
 | `--log` | `LOGFILE` | Log path |
 | `--encoding` | `ISO-8859-1` | Output charset; every resulting record must encode to exactly 132 bytes |
+| `--summary-log` | off | Add a separate success summary log record; takes no value |
 
 ## Input and selection
 
@@ -65,6 +66,8 @@ A successful run returns 0 and writes start and completion log records. Fatal in
 
 Completion is written only after the report closes successfully; a report-close failure attempts a sanitized error record. Logging and close failures may still leave partial or missing log records, and a completion record can remain if the log close subsequently fails. Closing files does not guarantee durable storage or atomic publication.
 
+With `--summary-log`, successful processing and report closure add exactly one separate, space-padded 132-byte record after the unchanged completion record. Its message is `OPERATIONS: N LINES: N+2 ERRORS: 0` (with actual decimal counts, no zero padding); operations count successfully processed detail rows and lines count successfully written report records including header and footer. Only selected rows count. The record contains no customer information. No summary is attempted for a processing or report-close failure. Summary-write and log-close failures are fatal (return 12); if the log close fails, the already written completion and summary may remain, so their presence alone does not prove a successful return. A write failure can leave a partial record. The extra record is opt-in because consumers expecting exactly two log records must explicitly approve and adapt to it; downstream and operations signoff is required.
+
 Report and log labels are English; input data and identifiers are not translated. In particular, Portuguese legacy report labels and the English labels are incompatible even when the business data match. Do not claim byte parity with the legacy golden.
 
 Detail amounts are right-aligned and use a decimal point in Java; the legacy formatter trims and left-aligns the amount and uses a comma editing mask. These changes affect fixed-position consumers independently of the language change and require downstream adaptation.
@@ -78,7 +81,7 @@ The source evidence and remaining uncertainties are detailed in [TRACEABILITY_MA
 * The legacy DB2 reader takes the first eight characters of an ISO date and then treats them as `YYYYMMDD`. Java uses the complete date.
 * The legacy numeric edit discards cents, and the footer moves a seven-digit count and larger total into narrower fields. Java retains decimal precision and rejects overflow rather than silently discarding digits.
 * The legacy `RF` DDL code does not match the COBOL `RFI` lookup. This must be considered when reconciling descriptions.
-* The legacy final log write follows closure of the log, and writer OPEN failure returns `9` while the caller checks only `2`. Java treats file failures as fatal and does not rely on writes to a closed log.
+* `PGMEXTRT` intended its final log message to include `OPR`, `LIN` and `ERR` counters, but attempts that write after closing the log. Java's optional English summary is a new separate record, not a reproduction of that faulty write. The legacy can return warning RC 4 for counted formatting errors; Java treats processing failures as fatal RC 12 and emits a summary only on success with zero errors. Writer OPEN failure returns `9` while the legacy caller checks only `2`; Java treats file failures as fatal.
 
 ## Historical tools and evidence
 

@@ -18,8 +18,9 @@ public class Main implements QuarkusApplication {
         try {
             Map<String, String> opts = argumentos(args);
             if (opts.containsKey("help")) {
-                System.out.println("Usage: java -jar quarkus-run.jar [--source mock|db2] [--mock PATH] [--date YYYYMMDD] [--branch BRANCH] [--account ACCOUNT] [--output PATH] [--log PATH] [--encoding CHARSET]");
+                System.out.println("Usage: java -jar quarkus-run.jar [--source mock|db2] [--mock PATH] [--date YYYYMMDD] [--branch BRANCH] [--account ACCOUNT] [--output PATH] [--log PATH] [--encoding CHARSET] [--summary-log]");
                 System.out.println("For db2, --account, --branch and --date are required explicitly; mock uses defaults when omitted.");
+                System.out.println("--summary-log adds a separate success log record with operation, report line and error counts.");
                 return 0;
             }
             String source = opts.getOrDefault("source", "mock");
@@ -41,7 +42,7 @@ public class Main implements QuarkusApplication {
                         System.getenv("EXTRATO_DB2_PASSWORD"), account, branch, date);
                 default -> throw new IllegalArgumentException("Source must be mock or db2");
             };
-            return Extrato.executar(open, output, log, LocalTime.now(), charset, Formato::detalhe);
+            return Extrato.executar(open, output, log, LocalTime.now(), charset, Formato::detalhe, opts.containsKey("summary-log"));
         } catch (Exception e) {
             String reason = "invalid arguments, configuration or file access";
             if (e instanceof java.time.format.DateTimeParseException) reason = "date must be a valid YYYYMMDD date";
@@ -60,6 +61,10 @@ public class Main implements QuarkusApplication {
         for (int i = 0; i < args.length; i++) {
             String key = args[i];
             if (key.equals("--help")) { result.put("help", ""); continue; }
+            if (key.equals("--summary-log")) {
+                if (result.put("summary-log", "") != null) throw new IllegalArgumentException("Repeated option");
+                continue;
+            }
             if (!Set.of("--source", "--mock", "--date", "--branch", "--account", "--output", "--log", "--encoding").contains(key)
                     || i + 1 >= args.length || args[i + 1].startsWith("--"))
                 throw new IllegalArgumentException("Invalid or missing option");

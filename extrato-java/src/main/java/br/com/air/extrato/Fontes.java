@@ -152,7 +152,7 @@ final class Fontes {
                         if (result.wasNull()) throw new SQLException("Missing paid count");
                         return new Operacao(result.getString(1), result.getString(2), modality, descricao(modality),
                                 result.getBigDecimal(4), installments, paid, result.getBigDecimal(7),
-                                due.format(Formato.DATE), result.getString(9).stripTrailing());
+                                Formato.compactDate(due), result.getString(9).stripTrailing());
                     } catch (SQLException | RuntimeException e) { throw new SQLException("DB2 read failed"); }
                 }
                 public void close() throws SQLException {

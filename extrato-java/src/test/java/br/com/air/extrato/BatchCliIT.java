@@ -48,8 +48,13 @@ class BatchCliIT {
     }
 
     private int run(Map<String, String> environment, String... args) throws Exception {
+        return runWithHeap(environment, null, args);
+    }
+
+    private int runWithHeap(Map<String, String> environment, String heap, String... args) throws Exception {
         var command = new java.util.ArrayList<String>();
         command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
+        if (heap != null) command.add("-Xmx" + heap);
         command.add("-jar");
         command.add(Path.of("target/quarkus-app/quarkus-run.jar").toAbsolutePath().toString());
         command.addAll(java.util.List.of(args));
@@ -195,6 +200,32 @@ class BatchCliIT {
         assertFalse(console.contains("sensitive malformed input"));
         assertEquals(12, run("--mock", input.toString(), "--output", input.toString(), "--log", log.toString()));
         assertEquals("sensitive malformed input\n", Files.readString(input));
+    }
+
+    @Test void hugeExponentAmountsFailSafelyUnderConstrainedHeap() throws Exception {
+        Path input = dir.resolve("input"), output = dir.resolve("output"), log = dir.resolve("log");
+        for (String account : List.of("0042123456", "9999123456")) {
+            for (boolean original : List.of(true, false)) {
+                for (String amount : List.of("1e100000000", "-1e-100000000")) {
+                    Files.writeString(input, account + "|SENTINEL|CPE|SENTINEL|" + (original ? amount : "1") + "|1|0|"
+                            + (original ? "1" : amount) + "|20260101|A\n", StandardCharsets.ISO_8859_1);
+                    assertEquals(12, runWithHeap(Map.of(), "64m", args(input, output, log, "ISO-8859-1")));
+                    assertEquals(0, Files.size(output));
+                    String field = original ? "original amount" : "balance";
+                    assertLog(log, StandardCharsets.ISO_8859_1, "ERROR BATCH PROCESSING FAILED: Invalid mock " + field + " at line 1");
+                    String console = Files.readString(dir.resolve("console"));
+                    assertTrue(console.contains("Invalid mock " + field + " at line 1"));
+                    assertFalse(console.contains("SENTINEL"));
+                    assertFalse(console.contains(amount));
+                    assertFalse(Files.readString(log).contains("SENTINEL"));
+                }
+            }
+        }
+        Files.writeString(input, INPUT.replace("|1.25|2|1|0.99|", "|1.2500e0|2|1|99e-2|")
+                .replace("|1|1|0|1|20260101|A|0042|20260508", "|0e100000000|1|0|0e-100000000|20260101|A|0042|20260508"), StandardCharsets.ISO_8859_1);
+        assertEquals(0, runWithHeap(Map.of(), "64m", args(input, output, log, "ISO-8859-1")));
+        assertRecords(output, StandardCharsets.ISO_8859_1, HEADER, FIRST, SECOND, THIRD, FOOTER);
+        assertLog(log, StandardCharsets.ISO_8859_1, "INFO CREDIT STATEMENT COMPLETED");
     }
 
     @Test void formattingFailureLeavesPartialReportAndFatalLog() throws Exception {

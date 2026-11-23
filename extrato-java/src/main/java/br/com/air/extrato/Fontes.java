@@ -87,9 +87,30 @@ final class Fontes {
         return lista(selected);
     }
     private static BigDecimal amount(String text) {
-        BigDecimal value = new BigDecimal(text.trim()).setScale(2, RoundingMode.UNNECESSARY);
-        if (value.precision() > 13) throw new IllegalArgumentException("Amount outside DECIMAL(13,2)");
-        return value;
+        String input = text.trim();
+        BigDecimal value = new BigDecimal(input);
+        if (value.signum() == 0) return BigDecimal.ZERO.setScale(2);
+        long scaledPrecision = (long) value.precision() - value.scale() + 2;
+        if (scaledPrecision < 1 || scaledPrecision > 13)
+            throw new IllegalArgumentException("Amount outside DECIMAL(13,2)");
+        if (value.scale() <= 2) return value.setScale(2, RoundingMode.UNNECESSARY);
+
+        // Remove only verified zero digits from the input, without constructing 10^scale.
+        int exponent = Math.max(input.indexOf('e'), input.indexOf('E'));
+        int end = exponent < 0 ? input.length() : exponent;
+        long remove = (long) value.scale() - 2;
+        while (remove > 0) {
+            char c = input.charAt(--end);
+            if (c == '.') continue;
+            if (Character.digit(c, 10) != 0) throw new IllegalArgumentException("Amount requires rounding");
+            remove--;
+        }
+        long unscaled = 0;
+        for (int i = 0; i < end; i++) {
+            int digit = Character.digit(input.charAt(i), 10);
+            if (digit >= 0) unscaled = unscaled * 10 + digit;
+        }
+        return BigDecimal.valueOf(value.signum() * unscaled, 2);
     }
     private static int quantity(String text) {
         int n = Integer.parseInt(text.trim());

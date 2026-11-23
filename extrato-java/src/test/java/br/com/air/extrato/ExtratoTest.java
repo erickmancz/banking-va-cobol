@@ -118,6 +118,39 @@ class ExtratoTest {
         assertTrue(boundary.contains("32767"));
         assertThrows(ArithmeticException.class, () -> Formato.rodape(1, new BigDecimal("1.001")));
     }
+    @Test void mockAmountsRequireExactDecimal13Scale2() throws Exception {
+        Path input = dir.resolve("mock");
+        for (String[] example : List.of(
+                new String[] {"99999999999.99", "99999999999.99"},
+                new String[] {"-99999999999.99000", "-99999999999.99"},
+                new String[] {"+000123.45000", "123.45"},
+                new String[] {"1.2300e+2", "123.00"},
+                new String[] {"1000e-5", "0.01"},
+                new String[] {"-0e+2147483647", "0.00"},
+                new String[] {"0e2147483648", "0.00"},
+                new String[] {"0e-2147483647", "0.00"},
+                new String[] {"1e10", "10000000000.00"})) {
+            Files.writeString(input, "0042123456|A|CPE|x|" + example[0] + "|1|0|" + example[0] + "|20260101|A\n");
+            try (var source = Fontes.abrirMock(input, "0042123456", "0042", LocalDate.of(2026, 5, 8))) {
+                Operacao op = source.proxima();
+                assertEquals(new BigDecimal(example[1]), op.original(), example[0]);
+                assertEquals(new BigDecimal(example[1]), op.saldo(), example[0]);
+            }
+        }
+        for (String amount : List.of("100000000000", "-100000000000", "99999999999.991", "0.001",
+                "-1e-2147483647", "1e2147483647", "1e100000000", "1e-100000000",
+                "0e2147483649", "not-a-number")) {
+            for (String account : List.of("0042123456", "9999123456")) {
+                for (boolean original : List.of(true, false)) {
+                    Files.writeString(input, account + "|A|CPE|x|" + (original ? amount : "1") + "|1|0|"
+                            + (original ? "1" : amount) + "|20260101|A\n");
+                    var failure = assertThrows(IllegalArgumentException.class,
+                            () -> Fontes.abrirMock(input, "0042123456", "0042", LocalDate.of(2026, 5, 8)), amount);
+                    assertEquals("Invalid mock " + (original ? "original amount" : "balance") + " at line 1", failure.getMessage());
+                }
+            }
+        }
+    }
     @Test void encodingRejectsUnmappableAndMultibyteData() throws Exception {
         var item = new Operacao("a", "é", "CPE", "x", BigDecimal.ONE, 1, 0, BigDecimal.ONE, "20260101", "A");
         assertEquals(12, run(List.of(item), StandardCharsets.UTF_8));

@@ -18,10 +18,13 @@ public class Main implements QuarkusApplication {
         try {
             Map<String, String> opts = argumentos(args);
             if (opts.containsKey("help")) {
-                System.out.println("Usage: java -jar quarkus-run.jar [--source mock|db2] [--mock PATH] [--date YYYYMMDD] [--branch NNNN] [--account ACCOUNT] [--output PATH] [--log PATH] [--encoding CHARSET]");
+                System.out.println("Usage: java -jar quarkus-run.jar [--source mock|db2] [--mock PATH] [--date YYYYMMDD] [--branch BRANCH] [--account ACCOUNT] [--output PATH] [--log PATH] [--encoding CHARSET]");
+                System.out.println("For db2, --account, --branch and --date are required explicitly; mock uses defaults when omitted.");
                 return 0;
             }
             String source = opts.getOrDefault("source", "mock");
+            if (source.equals("db2") && !(opts.containsKey("account") && opts.containsKey("branch") && opts.containsKey("date")))
+                throw new IllegalArgumentException("DB2 requires explicit --account, --branch and --date");
             LocalDate date = Formato.date(opts.getOrDefault("date", "20260508"));
             String branch = opts.getOrDefault("branch", "0042");
             String account = opts.getOrDefault("account", "0042123456");
@@ -45,6 +48,7 @@ public class Main implements QuarkusApplication {
             else if (e instanceof java.nio.charset.UnsupportedCharsetException || e instanceof java.nio.charset.IllegalCharsetNameException) reason = "unsupported output encoding";
             else if (e instanceof IllegalArgumentException && e.getMessage() != null
                     && Set.of("Invalid or missing option", "Repeated option", "Source must be mock or db2",
+                    "DB2 requires explicit --account, --branch and --date",
                     "Branch must be 1-4 characters and account must be 1-10 characters without surrounding spaces", "Date year must be at least 0001",
                     "Input, output and log must be distinct files").contains(e.getMessage())) reason = e.getMessage();
             System.err.println("Batch failed: " + reason);

@@ -5,6 +5,12 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.net.ServerSocket;
+import java.net.SocketTimeoutException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -38,12 +44,18 @@ class BatchCliIT {
             + "0042123456|FUTURE-OUT|CPE|FUTURE|1|1|0|1|20260101|A|0042|20260509\n";
 
     private int run(String... args) throws Exception {
+        return run(Map.of(), args);
+    }
+
+    private int run(Map<String, String> environment, String... args) throws Exception {
         var command = new java.util.ArrayList<String>();
         command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
         command.add("-jar");
         command.add(Path.of("target/quarkus-app/quarkus-run.jar").toAbsolutePath().toString());
         command.addAll(java.util.List.of(args));
-        Process process = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(dir.resolve("console").toFile()).start();
+        ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(dir.resolve("console").toFile());
+        builder.environment().putAll(environment);
+        Process process = builder.start();
         if (!process.waitFor(45, TimeUnit.SECONDS)) { process.destroyForcibly(); fail("CLI timed out"); }
         return process.exitValue();
     }
@@ -84,6 +96,73 @@ class BatchCliIT {
         assertEquals(0, run(args(input, output, log, "ISO-8859-1")));
         assertRecords(output, StandardCharsets.ISO_8859_1, HEADER, FIRST, SECOND, THIRD, FOOTER);
         assertLog(log, StandardCharsets.ISO_8859_1, "INFO CREDIT STATEMENT COMPLETED");
+    }
+
+    @Test void defaultMockSelectionMatchesExplicitSelection() throws Exception {
+        Path input = dir.resolve("input"), output = dir.resolve("output"), log = dir.resolve("log");
+        Files.writeString(input, INPUT, StandardCharsets.ISO_8859_1);
+        assertEquals(0, run("--mock", input.toString(), "--output", output.toString(), "--log", log.toString()));
+        assertRecords(output, StandardCharsets.ISO_8859_1, HEADER, FIRST, SECOND, THIRD, FOOTER);
+        assertLog(log, StandardCharsets.ISO_8859_1, "INFO CREDIT STATEMENT COMPLETED");
+        byte[] defaults = Files.readAllBytes(output);
+        assertEquals(0, run(args(input, output, log, "ISO-8859-1")));
+        assertArrayEquals(defaults, Files.readAllBytes(output));
+    }
+
+    @Test void helpExplainsDb2RequirementsAndMockDefaults() throws Exception {
+        assertEquals(0, run("--help"));
+        assertTrue(Files.readString(dir.resolve("console")).contains(
+                "For db2, --account, --branch and --date are required explicitly; mock uses defaults when omitted."));
+    }
+
+    @Test void missingDb2SelectionsFailBeforeFilesOrConnection() throws Exception {
+        Path output = dir.resolve("output"), log = dir.resolve("log");
+        byte[] outputBefore = "existing report".getBytes(StandardCharsets.UTF_8);
+        byte[] logBefore = "existing log".getBytes(StandardCharsets.UTF_8);
+        try (ServerSocket server = new ServerSocket(0)) {
+            server.setSoTimeout(300);
+            Map<String, String> env = Map.of("EXTRATO_DB2_URL", "jdbc:db2://127.0.0.1:" + server.getLocalPort() + "/TESTDB",
+                    "EXTRATO_DB2_USER", "secret-user", "EXTRATO_DB2_PASSWORD", "secret-password");
+            for (String missing : List.of("account", "branch", "date", "all")) {
+                Files.write(output, outputBefore);
+                Files.write(log, logBefore);
+                List<String> options = new ArrayList<>(List.of("--source", "db2", "--output", output.toString(), "--log", log.toString()));
+                if (!missing.equals("account") && !missing.equals("all")) options.addAll(List.of("--account", "secret123"));
+                if (!missing.equals("branch") && !missing.equals("all")) options.addAll(List.of("--branch", "0042"));
+                if (!missing.equals("date") && !missing.equals("all")) options.addAll(List.of("--date", "20260508"));
+                assertEquals(12, run(env, options.toArray(String[]::new)), missing);
+                assertArrayEquals(outputBefore, Files.readAllBytes(output), missing);
+                assertArrayEquals(logBefore, Files.readAllBytes(log), missing);
+                String console = Files.readString(dir.resolve("console"));
+                assertTrue(console.contains("DB2 requires explicit --account, --branch and --date"), missing);
+                assertFalse(console.contains("secret"), missing);
+                assertThrows(SocketTimeoutException.class, server::accept, missing);
+            }
+        }
+    }
+
+    @Test void explicitDb2SelectionsIncludingDemoValuesReachJdbc() throws Exception {
+        Path output = dir.resolve("output"), log = dir.resolve("log");
+        for (String[] selection : List.of(new String[] {"0042123456", "0042", "20260508"},
+                new String[] {"1234567890", "1234", "20240101"})) {
+            try (ServerSocket server = new ServerSocket(0)) {
+                server.setSoTimeout(20000);
+                var accepted = CompletableFuture.runAsync(() -> {
+                    try (var socket = server.accept()) { /* Close without speaking DB2. */ }
+                    catch (Exception e) { throw new RuntimeException(e); }
+                });
+                Map<String, String> env = Map.of("EXTRATO_DB2_URL", "jdbc:db2://127.0.0.1:" + server.getLocalPort() + "/TESTDB:loginTimeout=5;",
+                        "EXTRATO_DB2_USER", "secret-user", "EXTRATO_DB2_PASSWORD", "secret-password");
+                assertEquals(12, run(env, "--source", "db2", "--account", selection[0], "--branch", selection[1],
+                        "--date", selection[2], "--output", output.toString(), "--log", log.toString()));
+                accepted.get(20, TimeUnit.SECONDS);
+                assertEquals(0, Files.size(output));
+                assertLog(log, StandardCharsets.ISO_8859_1, "ERROR BATCH PROCESSING FAILED: DB2 operation failed");
+                String console = Files.readString(dir.resolve("console"));
+                assertFalse(console.contains("secret"));
+                assertFalse(console.contains("DB2 requires explicit"));
+            }
+        }
     }
 
     @Test void ibm037GoldenUsesTheSameIndependentRecords() throws Exception {

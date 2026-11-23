@@ -131,4 +131,18 @@ class ExtratoTest {
         assertTrue(Fontes.SQL.contains("ORDER BY OC.CD_MODALIDADE, OC.NR_CONTRATO WITH UR"));
         assertEquals("REAL ESTATE FINANCE", Fontes.descricao("RF "));
     }
+    @Test void db2RequiresEverySelectionOptionBeforeOutputAccess() throws Exception {
+        Path output = dir.resolve("output"), log = dir.resolve("log");
+        Files.writeString(output, "report");
+        Files.writeString(log, "log");
+        for (String[] selection : List.of(new String[] {}, new String[] {"--branch", "0042", "--date", "20260508"},
+                new String[] {"--account", "0042123456", "--date", "20260508"},
+                new String[] {"--account", "0042123456", "--branch", "0042"})) {
+            var arguments = new java.util.ArrayList<>(List.of("--source", "db2", "--output", output.toString(), "--log", log.toString()));
+            arguments.addAll(List.of(selection));
+            assertEquals(12, new Main().run(arguments.toArray(String[]::new)));
+            assertEquals("report", Files.readString(output));
+            assertEquals("log", Files.readString(log));
+        }
+    }
 }

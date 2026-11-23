@@ -18,9 +18,9 @@ Use `--help` for the CLI. All options take a value except `--help`; repeated val
 | --- | --- | --- |
 | `--source` | `mock` | `mock` or `db2` |
 | `--mock` | `../mock-operacoes.dat` | Local input file |
-| `--account` | `0042123456` | 1–10 characters, without surrounding whitespace |
-| `--branch` | `0042` | 1–4 characters, without surrounding whitespace |
-| `--date` | `20260508` | Valid calendar date, `YYYYMMDD`, used as cutoff |
+| `--account` | `0042123456` (mock only) | 1–10 characters, without surrounding whitespace; required explicitly for DB2 |
+| `--branch` | `0042` (mock only) | 1–4 characters, without surrounding whitespace; required explicitly for DB2 |
+| `--date` | `20260508` (mock only) | Valid calendar date, `YYYYMMDD`, used as cutoff; required explicitly for DB2 |
 | `--output` | `SAIDA` | Statement path |
 | `--log` | `LOGFILE` | Log path |
 | `--encoding` | `ISO-8859-1` | Output charset; every resulting record must encode to exactly 132 bytes |
@@ -42,6 +42,8 @@ Mock description is input data, copied without translation; historical fixtures 
 Mock account is nonblank and at most 10 characters after stripping trailing padding; status must be `A`, `I`, `Q`, or `R` (only `A` and `I` are selected). Accepted modality codes are `CPE`, `CSG`, `CDC`, `RF`, `RFI`, `VEI`, `CHQ`, `ANT` and `OUT`. Only selected rows are formatted: contract and description must fit their output fields, and values must fit the selected encoding. A 12-field branch is nonblank and 1–4 characters after trimming padding, unlike the ten-field prefix convention.
 
 DB2 reads `DB2PROD.TB_OPERACAO_CREDITO` joined to `DB2PROD.TB_CLIENTE`, using parameterized account, branch and cutoff predicates and `WITH UR`. Provide an authorized read-only identity through the environment, without embedding credentials in commands or the repository:
+
+The DB2 CLI deliberately requires all three selection options to be supplied explicitly, even when their values equal the mock defaults. Previously an omitted option silently used a demo value. Missing options return 12 before output or log files are opened or a DB2 connection is attempted. Mock defaults are unchanged.
 
 ```sh
 export EXTRATO_DB2_URL='jdbc:db2://host:50000/database'

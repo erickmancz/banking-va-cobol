@@ -80,6 +80,21 @@ The source evidence and remaining uncertainties are detailed in [TRACEABILITY_MA
 
 The GitHub workflow `.github/workflows/extrato-java.yml` builds and runs the Java tests on Java 21. It does not execute DB2, IBM COBOL or z/OS and does not run the old differential suite. Maven's normal verification is not a DB2 deployment test.
 
+## Qualification evidence and release gates
+
+The following gates are requirements, not evidence of approval. Record the named accountable owner, date, environment and retained evidence for each; no approval is inferred from a passing local build. Do not release until the responsible owners explicitly sign off all applicable gates.
+
+| Gate | Owner and evidence required | Release decision |
+| --- | --- | --- |
+| Corrected-format local golden | Java test owner: retain `mvn -B -ntp verify` results and independent literal 132-byte report/log expectations for synthetic selection, ordering, empty and failure cases, including IBM037. This is a local regression check, not host certification. | Fail on any mismatch or missing evidence. |
+| Historical artifact | Migration owner: retain the historical GnuCOBOL golden and its checksum above as provenance only; document intentional differences. It is not an expected Java golden. | Do not use old defective parity as an acceptance gate. |
+| Real legacy versus Java reconciliation | Business/data owner and legacy owner: use an authorized controlled, reproducible snapshot and matched inputs; retain both outputs, counts, totals, hashes, row-level differences and signed disposition of each correction and unexplained difference. | Fail on unexplained differences; do not assume historical mock proves reconciliation. |
+| Live DB2/JCC and dates | DB2 owner: retain authorized environment and JCC versions, schema, privileges, collation and isolation, SQL and date-binding evidence, boundary-date selection and expected results; run the opt-in profile with independent fixtures. | Fail on missing access, discrepancies or unapproved isolation. |
+| CCSID and transfer | Encoding/host owner: identify actual CCSIDs and conversion path; retain representative encoded bytes, record lengths, lossless round-trip and transfer results on target systems. Local IBM037 tests do not establish the host CCSID. | Fail on conversion loss, mismatches or unknown CCSID. |
+| z/OS FB and scheduler | Operations owner: retain target dataset allocation and `RECFM=FB,LRECL=132` evidence for report and log, scheduler/JCL, monitoring, return-code and recovery tests. | Fail on allocation, sequencing, monitoring or return-code mismatch. |
+| Downstream layout and labels | Each downstream consumer and business owner: sign off the English labels, widened offsets, amount representation and interface specification; retain approval and consumer test results. | Fail if any consumer has not explicitly approved the changed contract. |
+| Failure and rollback | Operations and release owners: retain evidence for malformed input, read/write/DB2 failures, RC 12, logs, quarantine of partial files and a rehearsed rollback to the legacy job; record the go/no-go decision. | Fail closed, do not distribute partial output, and roll back on a failed gate or production trigger. |
+
 ## DB2 and mainframe deployment limitations
 
 No DB2 or z/OS instance is available here. Before deployment, validate the driver and JDBC URL, schema, privileges, network/TLS, SQL dialect and JDBC 4.2 `LocalDate` binding and retrieval against the authorized DB2 version and JCC driver. The sample DDL declares EBCDIC and non-null columns; validate actual schema and null behavior. `WITH UR` can see uncommitted changes; use a controlled snapshot or approved isolation policy for reproducible reconciliation, and account for DB2 collation differences. Do not run the sample DDL or JCL against production.

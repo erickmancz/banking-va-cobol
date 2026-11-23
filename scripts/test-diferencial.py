@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Historical only: targets the old CLI and defective byte-for-byte COBOL behavior.
+# This is not a compatibility or acceptance test for the corrected Java batch.
 """Comparação de processos reais, com dados sintéticos e mock COBOL original."""
 
 import os
